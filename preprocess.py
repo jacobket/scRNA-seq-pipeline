@@ -136,7 +136,7 @@ def find_elbow_pt(explained_var, n_points=30):
     Returns:
         int: The index of the PC representing the elbow point.
     """
-    # Use only the first 'n_points' PCs
+    # Use only the first 'n_points' PCs, default is 30
     explained_var = explained_var[:n_points]
     x_coords = np.arange(n_points)
     
@@ -152,7 +152,7 @@ def find_elbow_pt(explained_var, n_points=30):
         distance = np.abs(np.cross(p2 - p1, p1 - p)) / np.linalg.norm(p2-p1)
         distances.append(distance)
     # Find index of max distance from line (elbow pt)
-    elbow_pt = np.argmax(distances) + 1 # Adding 1 to match 1-based PC numbering
+    elbow_pt = np.argmax(distances) + 1
     
     print(f"Elbow point found at PC {elbow_pt} based on the perpendicular line method.")
     return elbow_pt
