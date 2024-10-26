@@ -6,7 +6,7 @@ This pipeline automates the preprocessing, quality control, normalization, and d
 
 To use this pipeline, install the necessary packages:
 ```bash
-pip install scanpy anndata pandas
+pip install scanpy anndata pandas numpy
 ```
 Alternatively, use the `setup.py` file (see instructions below) for automated package installation.
 

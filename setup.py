@@ -7,7 +7,8 @@ setup(
     install_requires=[
         "scanpy",
         "anndata",
-        "pandas"
+        "pandas",
+        "numpy"
     ],
     description="Automated pipeline for scRNA-seq preprocessing and analysis",
     author="Jacob Ketchum",
