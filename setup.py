@@ -8,7 +8,9 @@ setup(
         "scanpy",
         "anndata",
         "pandas",
-        "numpy"
+        "numpy",
+        "python-igraph",
+        "psycopg2-binary"
     ],
     description="Automated pipeline for scRNA-seq preprocessing and analysis",
     author="Jacob Ketchum",
