@@ -10,6 +10,14 @@ pip install scanpy anndata pandas numpy
 ```
 Alternatively, use the `setup.py` file (see instructions below) for automated package installation.
 
+# Setting Up PostgreSQL for the Pipeline
+To account for differences in login information for PostgreSQL on local environments, follow these steps to change the password on local environment to default.
+1. Ensure PostgreSQL is installed and running on your system.
+2. Create a password for the default postgres user if it's not already set:
+`sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'admin_password'
+3. Run the pipeline setup.
+
+
 ## Dataset Requirements
 This pipeline is designed for scRNA-seq datasets that contain the following three files:
 * `matrix.mtx.gz`: Matrix of raw gene expression counts

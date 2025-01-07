@@ -3,9 +3,47 @@ import pandas as pd
 import numpy as np
 import os
 import argparse
-import psycopg2
+from psycopg2 import sql
 import seaborn as sns
-import matplotlib.pyplot as plt
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
+from models import Base, Cluster, DEG # Import models defined above
+
+def setup_db(db_name = "scrna_seq_db", user="db_user", password="db_pass", host="localhost", port=5432):
+    """
+    Sets up and initializes the SQL database using SQLAlchemy.
+    """
+    db_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"
+    engine = create_engine(db_url) # como que porque
+    
+    #Check if db exists, create tables if necessary
+    print("Setting up the database...")
+    Base.metadata.create_all(engine)
+    print("Database schema set up.")
+    
+    inspector = inspect(engine)
+    print("Here's the table names: ", inspector.get_table_names())
+    Session = sessionmaker(bind = engine) # sessionmaker creates session factory, a callable object that produces Session instances bound to 'engine'
+    return Session() # Now returning a specific Session INSTANCE 
+
+def clear_db(engine):
+    """
+    Clears all data from the database and recreates it using updated schema.
+    """
+    print("Resetting the database...")
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    print("Database schema reset.")
+    
+    
+def get_next_run_id(session):
+    """
+    Fetches the last run_id from the database and increments it.
+    """
+    last_run = session.query(Cluster.run_id).order_by(Cluster.run_id.desc()).first()
+    if last_run and last_run[0] is not None:
+        return last_run[0] + 1  # Increment last run
+    return 1 # Default to 1 (starting pt) if no runs exist
 
 def get_param():
     """
@@ -20,6 +58,7 @@ def get_param():
     parser.add_argument('--mtx_url', type=str, required=False, help="URL for the matrix file")
     parser.add_argument('--barcodes_url', type=str, required=False, help="URL for the barcodes file")
     parser.add_argument('--features_url', type = str, required=False, help="URL for the features file")
+    parser.add_argument('--clear_db', action='store_true', required=False, help="Clear the SQL db before starting the pipeline.")
     return parser.parse_args()
 
 def download_files(mtx_url=None, barcodes_url=None, features_url=None):
@@ -114,7 +153,6 @@ def normalize_and_scale_data(adata):
     """
     print("Now performing normalization and scaling...")
     sc.pp.normalize_total(adata, target_sum=1e4) #Total count normalize data matrix to 10000 reads / cell, so counts are comparable across cells
-    print("here")
     sc.pp.log1p(adata) # Logarithmize the data to reduce influence of outlier cells
     
     #Identify highly variable genes (preferred for studying differences across cell populations)
@@ -130,9 +168,7 @@ def normalize_and_scale_data(adata):
     print("Plotting the top 20 most highly expressed genes...")
     sc.pl.highest_expr_genes(adata, n_top=20)
     # Look for highly expressed genes driving variability in dataset, can be cell-type specific marker genes
-    print("heree")
     sc.pp.regress_out(adata, ["total_counts", "pct_counts_mt"])
-    print("hereee")
     sc.pp.scale(adata, max_value=10)
     return adata
 
@@ -201,30 +237,76 @@ def dimensionality_reduction(adata):
     
     return adata
 
-def diff_expression_analysis(adata):
+def process_data(adata, run_id):
+    """
+    Extracts clusters and DEG data from the AnnData object.
+    """
+    clusters = []
+    # Create a dictionary with the following values for each Leiden cluster and append to 'clusters' list
+    for cluster_id in adata.obs['leiden'].unique(): # Iterate through clusters created by Leiden grouping
+        cluster_data = adata[adata.obs['leiden'] == cluster_id] # subset of data corr to cluster as defined above
+        clusters.append({
+            "run_id": run_id,
+            "cluster_id": cluster_id,
+            "num_cells": cluster_data.n_obs, # Number of observations (Cells)
+            "avg_expression": float(cluster_data.X.mean()) # X is main data matrix in AnnData object
+        })
+        
+    degs = [] # Captures DEGs identified by sc.tl.rank_genes_groups
+    result = adata.uns['rank_genes_groups']
+    groups = result['names'].dtype.names # Extracts cluster names (0,1,2..) to indicate what cluster each set of DEGs belongs to.
+    
+    for group in groups: # Iterate over each cluster to extract its DEGs
+        # Sort to pick top DEGs per cluster based on most bio-sig changes
+        sorted_genes = sorted(
+            # Use zip() to combine mulitple lists into a single iterable of tuples- ('GeneA', 2.3, 0.05, 0.001), ...
+            # result['names'][group] is the list of gene names for a cluster, second attribute is list of lfc for those genes,then list of pvals, adj pvals
+            zip(
+                result['names'][group], 
+                result['logfoldchanges'][group], 
+                result['pvals'][group], 
+                result['pvals_adj'][group]
+            ),
+            key=lambda x: abs(x[1]), # Sort tuples using absolute value of logFC (magnitude of differential expression)
+            reverse=True
+        )
+        top_genes = sorted_genes[:100] # Limit to top 100 DEGs per cluster
+        
+        for gene, logfc, p_val, adj_p in top_genes: # Unpack tuple
+            if adj_p < 0.01:
+                degs.append({
+                    "run_id": run_id,
+                    "cluster_id": group, # Leiden cluster ID the DEG is associated w
+                    "gene_id": gene, # Gene name
+                    "logFC": float(logfc), # Relative degree of gene up/down regulation in cluster
+                    "p_value": float(p_val), # For diff expression significance 
+                    "adj_p_value": float(adj_p),
+                })
+    return clusters, degs
+
+def diff_expression_analysis(adata, run_id):
     """
     Performs clustering to ID cellular subpopulations using Leiden,
     uses Wilcoxon and logistical regression methods for differential expression analysis.
     
     Parameters:
         adata (AnnData): Annotated data matrix with single-cell RNA-seq counts.
-    
+        run_id (int): Represents the current unique run_id for this instance of the pipeline.
     Returns:
         None
     """
     # Clustering with Leiden to ID cellular subpopulations
     sc.tl.leiden(adata, resolution=0.6, random_state=0, flavor="igraph", n_iterations=-1, directed=False)
-    # 19 clusters with resolution=0.9, n_itr = -1 means run until convergence
-    
-    # REMOVE AFTER GETTING CLUSTERS NUM
+    # n_itr = -1 means run until convergence
     n_clusters = adata.obs['leiden'].nunique()
     print(f"Number of clusters: {n_clusters}")
 
     print("Plotting clusters along the first two PCs, colored by Leiden clusters...")
     sc.pl.pca(adata, color="leiden")
-    #Differential Expression analysis, visualizations
     #Use Wilcoxon method to visualize differential expression across clusters
     sc.tl.rank_genes_groups(adata, groupby="leiden", method="wilcoxon")
+    clusters, degs = process_data(adata, run_id)
+    
     print("Performing Differential Expression Analysis for each cluster to ID distinctively expressed genes...")
     sc.pl.rank_genes_groups(adata, n_genes=25, sharey=False)
     # The highly ranked genes are likely to be marker genes since they tend to distinguish btwn clusters
@@ -245,10 +327,44 @@ def diff_expression_analysis(adata):
     print("Plotting UMAP colored by the top-ranked gene in each cluster...")
     sc.pl.umap(adata, color=top_genes) # Plot expression of top marker genes on UMAP
     # Inspect if marker genes are localized to specific clusters, suggests distinct cell populations
+    return clusters, degs
+    
+def populate_db(session, clusters, degs):
+    """
+    Populates the database with cluster and DEG results.
+    """
+    cluster_id_map = {}
+    for cluster in clusters:
+        new_cluster = Cluster(
+            run_id = cluster['run_id'],
+            cluster_id=cluster['cluster_id'],
+            num_cells=cluster['num_cells'],
+            avg_expression=cluster['avg_expression'] # removed float conversion here
+        )
+        session.add(new_cluster)
+        session.flush() # Ensures db generates ID
+        cluster_id_map[cluster['cluster_id']] = new_cluster.id # Map Leiden cluster ID to db ID
+    session.commit()
 
+    for deg in degs: # Update DEGs with correct cluster IDs to ensure mapping
+        new_deg = DEG(
+            run_id = deg['run_id'],
+            cluster_id=cluster_id_map[deg['cluster_id']],
+            gene_id=deg['gene_id'],
+            logFC=deg['logFC'],
+            p_value=deg['p_value'],
+            adj_p_value=deg['adj_p_value']
+        )
+        session.add(new_deg)
+    session.commit()
 
 if __name__ == "__main__":
-    args= get_param()
+    args= get_param() # Parse command-line args
+    session = setup_db() # Setup database
+    if args.clear_db:
+        clear_db(session.bind)
+    run_id = get_next_run_id(session)
+    # Continue w pipeline execution
     prefix_path = args.mtx_url.split("/")[-1].split('_')[0] + '_'
     download_files(args.mtx_url, args.barcodes_url, args.features_url)
     adata = sc.read_10x_mtx('data', var_names='gene_symbols', cache=True, prefix = prefix_path) # Load the files into Scanpy
@@ -256,8 +372,9 @@ if __name__ == "__main__":
     adata = filter_data_based_on_qc(adata)
     adata = normalize_and_scale_data(adata)
     adata = dimensionality_reduction(adata)
-    diff_expression_analysis(adata)
-
+    
+    clusters, degs = diff_expression_analysis(adata, run_id)
+    populate_db(session, clusters, degs) # insert params
 
 #First step- Preprocessing: Quality control, filtering --> normalization, scaling
 #Second step- Dimensionality Redution- PCA and UMAP
@@ -266,42 +383,6 @@ if __name__ == "__main__":
 #Fifth- SQL DB Integration
 #Sixth-Dockerization/ Nextflow
 
-#uncomment till end of for loop
-# conn = psycopg2.connect(
-#     database = "scrna_seq_db",
-#     user="jacobo",
-#     password="puffles",
-#     host="localhost",
-#     port="5432"
-# )
-# cursor= conn.cursor()
-# for cell_id, cluster in zip(adata.obs_names, adata.obs["leiden"]):
-#     cursor.execute("INSERT INTO Cells (cell_id, cluster_id) VALUES (?, ?)", (cell_id, cluster))
-
-# # Insert genes and their expression values
-# for gene_id, values in zip(adata.var_names, adata.X.T): # Transpose to get gene-wise data
-#     cursor.execute("INSERT INTO Genes (gene_id) VALUES (?)", (gene_id,))
-#     for cell_id, expression in zip(adata.obs_names, values):
-#         cursor.execute("INSERT INTO Expression (cell_id, gene_id, expression_value) VALUES (?, ?, ?)",
-#                        (cell_id, gene_id, expression))
-        
-
-# Insert and query data as needed
-#cursor.execute("SELECT * FROM Cells;")
-# SELECT gene_name, log_fold_change, p_value
-# FROM DifferentialExpression
-# WHERE cluster_id = ?
-# AND p_value < 0.05;
-
-# Uncomment this block
-# conn.commit()
-# cursor.close()
-# conn.close()
-
-#DESEQ2- using R
-# Marker gene identification
-# Database Integration uding PostgreSQL
-
-# Future: finish clustering, DE analysis, results storing using SQL db, dockerization
+# Future: dockerization
 # Edits- LINC02593 graph where its expression based on this gene- irrelevant? 
 # update setup.py to include all added packages, make it tied to package and setup package

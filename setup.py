@@ -10,8 +10,14 @@ setup(
         "pandas",
         "numpy",
         "python-igraph",
-        "psycopg2-binary"
+        "psycopg2-binary",
+        "alembic"
     ],
+    entry_points={
+        "console_scripts": [
+            "run-pipeline=scRNAseq_pipeline.main:main"
+        ],
+    },
     description="Automated pipeline for scRNA-seq preprocessing and analysis",
     author="Jacob Ketchum",
 )
