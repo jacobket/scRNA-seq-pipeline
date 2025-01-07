@@ -11,7 +11,6 @@ setup(
         "numpy",
         "python-igraph",
         "psycopg2-binary",
-        "alembic"
     ],
     entry_points={
         "console_scripts": [
