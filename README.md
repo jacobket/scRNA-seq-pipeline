@@ -54,7 +54,6 @@ To use the SQL storage feature, ensure that PostgreSQL is installed and running 
 1. Ensure PostgreSQL is installed and running:
 * On Linux: `sudo systemctl start postgresql`
 * On macOS: `brew services start postgresql`
-2. Update the database credenitals in your main.py or 
 
 ## Additional Pipeline Features In Progress
 This pipeline will soon include the following features:
