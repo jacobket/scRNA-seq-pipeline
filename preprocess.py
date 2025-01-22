@@ -59,9 +59,10 @@ def get_param():
     parser.add_argument('--barcodes_url', type=str, required=False, help="URL for the barcodes file")
     parser.add_argument('--features_url', type = str, required=False, help="URL for the features file")
     parser.add_argument('--clear_db', action='store_true', required=False, help="Clear the SQL db before starting the pipeline.")
+    parser.add_argument('--step', choices=['qc','clustering', 'dea'], required=True, help="Step in the pipeline to run.")
     return parser.parse_args()
 
-def download_files(mtx_url=None, barcodes_url=None, features_url=None):
+def download_files(mtx_url=None, barcodes_url=None, features_url=None, prefix_path=None):
     """
     Downloads scRNA-seq dataset files (matrix, barcodes, and features) from provided URLs into a local folder.
     Checks for existing local files to avoid redundant downloads when re-running the pipeline.
@@ -357,32 +358,61 @@ def populate_db(session, clusters, degs):
         )
         session.add(new_deg)
     session.commit()
+    
+def save_intermediate_data(adata, filename):
+    """
+    Save an AnnData object to a file.
+    """
+    adata.write(filename)
+    print(f"Intermediate data saved to {filename}")
+    
+def load_intermediate_data(filename):
+    """
+    Load an AnnaData object from a file.
+    """
+    adata = sc.read(filename)
+    print(f"Intermediate data loaded from {filename}")
+    return adata
 
-if __name__ == "__main__":
+def main():
     args= get_param() # Parse command-line args
-    session = setup_db() # Setup database
-    if args.clear_db:
-        clear_db(session.bind)
-    run_id = get_next_run_id(session)
+    
     # Continue w pipeline execution
     prefix_path = args.mtx_url.split("/")[-1].split('_')[0] + '_'
-    download_files(args.mtx_url, args.barcodes_url, args.features_url)
+    download_files(args.mtx_url, args.barcodes_url, args.features_url, prefix_path)
     adata = sc.read_10x_mtx('data', var_names='gene_symbols', cache=True, prefix = prefix_path) # Load the files into Scanpy
-    adata = load_and_plot_qc(adata)
-    adata = filter_data_based_on_qc(adata)
-    adata = normalize_and_scale_data(adata)
-    adata = dimensionality_reduction(adata)
     
-    clusters, degs = diff_expression_analysis(adata, run_id)
-    populate_db(session, clusters, degs) # insert params
+    if args.step == "qc":
+        adata = load_and_plot_qc(adata)
+        adata = filter_data_based_on_qc(adata)
+        adata = normalize_and_scale_data(adata)
+        save_intermediate_data(adata, "qc_output.h5ad") # Save for later steps
+    
+    elif args.step == "clustering":
+        adata = load_intermediate_data("qc_output.h5ad") # Load QC data
+        adata = dimensionality_reduction(adata)
+        save_intermediate_data(adata, "clustering_output.h5ad")
+    
+    elif args.step == "dea":
+        #if args.clear_db: !! Add this functionality back as parameter 
+        session = setup_db() # Setup database
+        clear_db(session.bind) # For now, clearing db on every run with step=dea
+        run_id = get_next_run_id(session)
+        
+        adata = load_intermediate_data("clustering_output.h5ad") # Load clustered data
+        clusters, degs = diff_expression_analysis(adata, run_id)
+        populate_db(session, clusters, degs) # insert params
 
+    else:
+        raise ValueError("Include --step parameter in function call. Choose from: qc, clustering, dea")
+    
+if __name__ == "__main__":
+    main()
 #First step- Preprocessing: Quality control, filtering --> normalization, scaling
 #Second step- Dimensionality Redution- PCA and UMAP
 # Third step- Clustering (Leiden)
 #Fourth- Differential expression analysis (sc.tl.rank_genes_groups), ID marker genes for given subpopulations
 #Fifth- SQL DB Integration
-#Sixth-Dockerization/ Nextflow
-
-# Future: dockerization
+#Sixth-Dockerization
 # Edits- LINC02593 graph where its expression based on this gene- irrelevant? 
 # update setup.py to include all added packages, make it tied to package and setup package
