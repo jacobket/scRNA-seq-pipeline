@@ -2,3 +2,6 @@ pipeline/
 data/
 cache/
 .vscode/
+qc_output.h5ad
+clustering_output.h5ad
+top_marker_genes_per_cluster.csv

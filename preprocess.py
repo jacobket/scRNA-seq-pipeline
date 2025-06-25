@@ -75,6 +75,9 @@ def download_files(mtx_url=None, barcodes_url=None, features_url=None, prefix_pa
     Returns:
         None
     """
+    if mtx_url == "mtx_url" or barcodes_url == "barcodes_url" or features_url == "features_url":
+        raise ValueError("Please provide valid URLs for the input dataset.")
+    
     urls = {"Matrix": mtx_url, "Barcodes": barcodes_url, "Features": features_url} # Dictionary, key-value pairs
     filenames = {
         "Matrix": f"{prefix_path}matrix.mtx.gz",
