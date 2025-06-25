@@ -85,6 +85,8 @@ def download_files(mtx_url=None, barcodes_url=None, features_url=None, prefix_pa
         "Features": f"{prefix_path}features.tsv.gz"
     }
 
+    os.makedirs("data", exist_ok=True) # Adding so that Docker integration can access 'data' subdir
+
     for file_type, url in urls.items(): # urls.items() iterates over key-value pairs
         if url:
             file_path = os.path.join("data", filenames[file_type])
